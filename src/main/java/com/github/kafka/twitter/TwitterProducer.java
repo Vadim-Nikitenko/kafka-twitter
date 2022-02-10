@@ -23,8 +23,9 @@ import java.util.concurrent.TimeUnit;
 
 public class TwitterProducer {
 
-    Logger logger = LoggerFactory.getLogger(TwitterProducer.class);
+    private Logger logger = LoggerFactory.getLogger(TwitterProducer.class);
     private Properties prop;
+    private Producer<String, String> producer;
 
     public static void main(String[] args) {
         new TwitterProducer().run();
@@ -38,7 +39,7 @@ public class TwitterProducer {
         client.connect();
 
         // create a kafka producer
-        KafkaProducer<String, String> producer = createKafkaProducer();
+        producer = createKafkaProducer();
 
         // shutdown
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -59,13 +60,17 @@ public class TwitterProducer {
                 client.stop();
             }
             if (msg != null) {
-                producer.send(new ProducerRecord<>(prop.getProperty("topic.name"), null, msg), (recordMetadata, e) -> {
+                send(new ProducerRecord<>(prop.getProperty("topic.name"), null, msg), (recordMetadata, e) -> {
                     if (e != null) {
                         logger.error("Error producing a record", e);
                     }
                 });
             }
         }
+    }
+
+    public void send(ProducerRecord<String, String> producerRecord, Callback callback) {
+        producer.send(producerRecord, callback);
     }
 
     public Client createTwitterClient(BlockingQueue<String> msgQueue) {
@@ -91,12 +96,26 @@ public class TwitterProducer {
         return builder.build();
     }
 
-    private KafkaProducer<String, String> createKafkaProducer() {
+    private Producer<String, String> createKafkaProducer() {
         Properties properties = new Properties();
         properties.setProperty(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, prop.getProperty("bootstrap.server"));
         properties.setProperty(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, String.class.getName());
         properties.setProperty(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, String.class.getName());
-        return new KafkaProducer<>(properties);
+
+        // idempotence producer
+        properties.setProperty(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, String.valueOf(true));
+        properties.setProperty(ProducerConfig.ACKS_CONFIG, "all");
+        properties.setProperty(ProducerConfig.RETRIES_CONFIG, Integer.toString(Integer.MAX_VALUE));
+        properties.setProperty(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, "5");
+
+        // compression configs
+        properties.setProperty(ProducerConfig.COMPRESSION_TYPE_CONFIG, "snappy");
+        properties.setProperty(ProducerConfig.BATCH_SIZE_CONFIG, Integer.toString(32*1024));
+        properties.setProperty(ProducerConfig.LINGER_MS_CONFIG, "20");
+
+        producer = new KafkaProducer<>(properties);
+
+        return producer;
     }
 
     private void loadProps() {
@@ -109,5 +128,11 @@ public class TwitterProducer {
         }
     }
 
+    public Producer<String, String> getProducer() {
+        return producer;
+    }
 
+    public void setProducer(Producer<String, String> producer) {
+        this.producer = producer;
+    }
 }
